@@ -132,12 +132,11 @@
     </div>
   </div>
 
-  <!-- Three.js from jsDelivr (works on GitHub Pages) -->
+  <!-- Three.js -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/js/controls/OrbitControls.js"></script>
 
-  <!-- MediaPipe (exact pinned versions) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+  <!-- MediaPipe (Hands + drawing only) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"></script>
 
@@ -146,9 +145,7 @@
     const isMobile =
       /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       window.innerWidth <= 768;
-    if (isMobile) {
-      document.body.classList.add("mobile");
-    }
+    if (isMobile) document.body.classList.add("mobile");
 
     // --- THREE.JS SETUP ---
     const scene = new THREE.Scene();
@@ -167,12 +164,11 @@
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
     camera.position.set(isMobile ? 6 : 8, isMobile ? 6 : 8, isMobile ? 6 : 8);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.1;
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
-    const dir = new THREE.DirectionalLight(0xffffff, isMobile ? 0.6 : 0.9);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
     dir.position.set(10, 15, 8);
+    scene.add(ambient);
     scene.add(dir);
 
     const GRID_SIZE = isMobile ? 24 : 32;
@@ -182,7 +178,6 @@
       0x444444,
       0x222222
     );
-    gridHelper.position.set(0, 0, 0);
     scene.add(gridHelper);
 
     const voxelData = new Map();
@@ -192,7 +187,6 @@
     let lastTime = performance.now();
     let frameCount = 0;
 
-    // --- VOXELS ---
     function createVoxel(x, y, z) {
       const geo = new THREE.BoxGeometry(voxelSize, voxelSize, voxelSize);
       const mat = new THREE.MeshLambertMaterial({
@@ -233,11 +227,10 @@
       updateStats();
     }
 
-    // --- MEDIAPIPE HANDS SETUP ---
+    // --- MEDIAPIPE HANDS with direct getUserMedia ---
     const videoElement = document.getElementById("video");
     const canvasElement = document.getElementById("output_canvas");
     const canvasCtx = canvasElement.getContext("2d");
-
     if (isMobile) {
       canvasElement.width = 220;
       canvasElement.height = 165;
@@ -258,10 +251,46 @@
       ).textContent = `Voxels: ${voxelData.size} | FPS: ${fps.toFixed(0)}`;
     }
 
+    const hands = new Hands({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`,
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: isMobile ? 0 : 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6,
+    });
+    hands.onResults(onResults);
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: isMobile ? "user" : "environment" },
+          audio: false,
+        }); // same API as working WebRTC sample[web:44][web:67]
+        videoElement.srcObject = stream;
+        updateStatus("Camera started – show your hand");
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          processVideoFrame();
+        };
+      } catch (e) {
+        console.error("getUserMedia error:", e);
+        updateStatus("Camera error. Check permissions for this site.");
+      }
+    }
+
+    async function processVideoFrame() {
+      if (videoElement.readyState === 4) {
+        await hands.send({ image: videoElement });
+      }
+      requestAnimationFrame(processVideoFrame);
+    }
+
     function onResults(results) {
       canvasCtx.save();
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-
       if (videoElement.readyState === 4) {
         canvasCtx.drawImage(
           videoElement,
@@ -274,13 +303,10 @@
 
       if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
         const landmarks = results.multiHandLandmarks[0];
-
-        window.drawConnectors(
-          canvasCtx,
-          landmarks,
-          window.HAND_CONNECTIONS || window.hands.HAND_CONNECTIONS,
-          { color: "#00FF00", lineWidth: 2 }
-        );
+        window.drawConnectors(canvasCtx, landmarks, Hands.HAND_CONNECTIONS, {
+          color: "#00FF00",
+          lineWidth: 2,
+        });
         window.drawLandmarks(canvasCtx, landmarks, {
           color: "#FF4444",
           lineWidth: 1,
@@ -301,11 +327,8 @@
           -(indexTip.y - 0.5) * (isMobile ? 8 : 12),
           depth
         );
-
         updateStatus(
-          `Hand OK • Pinch: ${isPinch ? "ON" : "OFF"} • ${handPos
-            .x.toFixed(1)
-            .toString()},${handPos.y.toFixed(1)},${handPos.z.toFixed(1)}`
+          `Hand OK • Pinch: ${isPinch ? "ON" : "OFF"}`
         );
       } else {
         isPinch = false;
@@ -315,44 +338,6 @@
       canvasCtx.restore();
     }
 
-    async function initHands() {
-      const hands = new window.Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`,
-      });
-
-      hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: isMobile ? 0 : 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.6,
-      });
-
-      hands.onResults(onResults);
-
-      const cameraMP = new window.Camera(videoElement, {
-        onFrame: async () => {
-          try {
-            await hands.send({ image: videoElement });
-          } catch (e) {
-            console.error("hands.send error:", e);
-          }
-        },
-        width: canvasElement.width,
-        height: canvasElement.height,
-        facingMode: isMobile ? "user" : "environment",
-      });
-
-      try {
-        await cameraMP.start();
-        updateStatus("Camera started – show your hand");
-      } catch (e) {
-        console.error("Camera start error:", e);
-        updateStatus("Camera error. Check permissions in Chrome.");
-      }
-    }
-
-    // --- INTERACTION ---
     function handleHandInteraction() {
       if (!isPinch || handPos.length() === 0) return;
       if (pinchCooldown > 0) {
@@ -362,7 +347,6 @@
 
       const dirVec = handPos.clone().sub(camera.position).normalize();
       raycaster.set(camera.position, dirVec);
-
       const intersects = raycaster.intersectObjects(voxelMeshes);
       const point =
         intersects.length > 0
@@ -370,7 +354,7 @@
           : camera.position.clone().add(dirVec.multiplyScalar(5));
 
       toggleVoxel(point);
-      pinchCooldown = isMobile ? 10 : 6; // debounce
+      pinchCooldown = isMobile ? 10 : 6;
     }
 
     // --- UI BUTTONS ---
@@ -384,11 +368,9 @@
       voxelData.clear();
       updateStats();
     };
-
     document.getElementById("gridBtn").onclick = () => {
       gridHelper.visible = !gridHelper.visible;
     };
-
     document.getElementById("exportBtn").onclick = () => {
       let obj = "# voxel export
 ";
@@ -404,7 +386,6 @@
       a.download = "voxels.obj";
       a.click();
     };
-
     document.getElementById("sizeSlider").oninput = (e) => {
       voxelSize = parseFloat(e.target.value);
       voxelMeshes.forEach((m) => m.scale.setScalar(voxelSize));
@@ -432,7 +413,7 @@
     });
 
     // START
-    initHands();
+    startCamera();  // same style as working WebRTC sample[web:44][web:67]
     animate();
   </script>
 </body>
