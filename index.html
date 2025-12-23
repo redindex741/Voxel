@@ -264,21 +264,21 @@
     hands.onResults(onResults);
 
     async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: isMobile ? "user" : "environment" },
-          audio: false,
-        }); // same API as working WebRTC sample[web:44][web:67]
-        videoElement.srcObject = stream;
-        updateStatus("Camera started – show your hand");
-        videoElement.onloadedmetadata = () => {
-          videoElement.play();
-          processVideoFrame();
-        };
-      } catch (e) {
-        console.error("getUserMedia error:", e);
-        updateStatus("Camera error. Check permissions for this site.");
-      }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: isMobile ? "user" : "environment" },
+      audio: false,
+    });
+    videoElement.srcObject = stream;
+    updateStatus("✅ Camera started – show your hand");
+    videoElement.onloadedmetadata = () => {
+      videoElement.play();
+      processVideoFrame();
+    };
+  } catch (e) {
+    console.error("getUserMedia error:", e.name, e.message);   // NEW
+    updateStatus("❌ Camera error: " + e.name + " – " + e.message); // NEW
+  }
     }
 
     async function processVideoFrame() {
