@@ -1,0 +1,367 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adaptive Voxel Editor - PC/Mobile</title>
+    <style>
+        :root {
+            --video-w: 320px;
+            --video-h: 240px;
+            --info-right: 20px;
+            --control-bottom: 20px;
+        }
+        body.adaptive-mobile {
+            --video-w: 220px;
+            --video-h: 165px;
+            --info-right: 10px;
+            --control-bottom: 10px;
+            touch-action: none;
+        }
+        body { 
+            margin: 0; overflow: hidden; 
+            font-family: var(--adaptive-font, 'Segoe UI', system-ui, Arial); 
+            background: #000;
+            transition: all 0.3s ease;
+        }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        #video { 
+            position: absolute; top: 20px; left: 20px; 
+            width: var(--video-w); height: var(--video-h); 
+            z-index: 100; border: 2px solid #00ff00; border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+        #info { 
+            position: absolute; top: 20px; right: var(--info-right); 
+            color: white; background: rgba(0,0,0,0.9); 
+            padding: 15px; border-radius: 12px; min-width: 250px;
+            backdrop-filter: blur(10px); font-size: var(--adaptive-font-size, 14px);
+        }
+        #controls { 
+            position: absolute; bottom: var(--control-bottom); left: 20px; 
+            color: white; background: rgba(0,0,0,0.9); 
+            padding: 15px; border-radius: 12px; backdrop-filter: blur(10px);
+        }
+        button { 
+            background: #44ff44; color: black; border: none; 
+            padding: 10px 16px; margin: 4px; border-radius: 8px; 
+            cursor: pointer; font-weight: bold; font-size: var(--adaptive-btn-size, 14px);
+            touch-action: manipulation;
+        }
+        button:hover, button:active { background: #00ff00; }
+        button.active { background: #ff4444; }
+        #stats { font-size: 12px; color: #aaa; margin-top: 10px; }
+        .adaptive-hint { display: none; }
+        body.adaptive-mobile .adaptive-hint { display: block; color: #ffaa00; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="output_canvas" width="320" height="240" 
+                style="position: absolute; top: 20px; left: 20px; z-index: 99; border-radius: 12px;"></canvas>
+        
+        <div id="info">
+            <div><strong>🎮 Adaptive Voxel Editor</strong></div>
+            <div id="device-info" class="adaptive-hint">📱 Mobile Mode (iQOO Z9x Optimized)</div>
+            <div>👆 Index finger: Aim</div>
+            <div>✌️ Pinch: Add/Remove voxel</div>
+            <div id="pc-controls">🖱️ Mouse: Orbit camera</div>
+            <div id="mobile-controls" class="adaptive-hint">🖐️ 2-finger drag: Rotate</div>
+            <div id="status">Initializing...</div>
+            <div id="stats">Voxels: 0 | FPS: --</div>
+        </div>
+
+        <div id="controls">
+            <button id="clearBtn">🗑️ Clear</button>
+            <button id="gridBtn">📐 Grid</button>
+            <button id="exportBtn">💾 Export</button>
+            <label style="display:block; margin-top:10px;">
+                Size: <input type="range" id="sizeSlider" min="0.5" max="2" step="0.1" value="1">
+            </label>
+        </div>
+    </div>
+
+    <!-- Reliable CDNs -->
+    <script src="https://cdn.skypack.dev/three@0.169.0"></script>
+    <script src="https://cdn.skypack.dev/three@0.169.0/examples/jsm/controls/OrbitControls.js" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils@0.3/control_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js"></script>
+
+    <script>
+        // Auto-detect device & adapt
+        const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+        if (isMobile) {
+            document.body.classList.add('adaptive-mobile');
+            document.body.style.setProperty('--adaptive-font', 'system-ui');
+            document.body.style.setProperty('--adaptive-font-size', '16px');
+            document.body.style.setProperty('--adaptive-btn-size', '16px');
+            document.getElementById('device-info').textContent = '📱 iQOO Z9x Optimized';
+        } else {
+            document.body.style.setProperty('--adaptive-font', "'Segoe UI', Arial");
+            document.body.style.setProperty('--adaptive-font-size', '14px');
+            document.body.style.setProperty('--adaptive-btn-size', '14px');
+        }
+
+        // MediaPipe HAND_CONNECTIONS (global fix)
+        window.HAND_CONNECTIONS = [
+            [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+            [5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],
+            [13,17],[17,18],[18,19],[0,20]
+        ];
+
+        // Scene (optimized for mobile)
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(isMobile ? 0x000000 : 0x111111);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ 
+            antialias: !isMobile, // Disable AA on mobile for perf
+            powerPreference: "high-performance"
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = !isMobile; // Shadows off on mobile
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('container').appendChild(renderer.domElement);
+
+        // Adaptive controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        camera.position.set(isMobile ? 6 : 8, isMobile ? 6 : 8, isMobile ? 6 : 8);
+        controls.enableDamping = true;
+        controls.dampingFactor = isMobile ? 0.05 : 0.1;
+        controls.screenSpacePanning = false;
+        controls.minDistance = 2;
+        controls.maxDistance = isMobile ? 15 : 20;
+
+        // Lighting (reduced on mobile)
+        scene.add(new THREE.AmbientLight(0x404040, isMobile ? 0.6 : 0.4));
+        if (!isMobile) {
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(10, 10, 5);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+        }
+
+        // Voxel system (mobile optimized)
+        const GRID_SIZE = 24; // Smaller grid on mobile
+        const voxelData = new Map();
+        const voxelMeshes = [];
+        let showGrid = true;
+        let voxelSize = 1;
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 0;
+
+        // Adaptive grid
+        const gridHelper = new THREE.GridHelper(GRID_SIZE, GRID_SIZE/4, 0x444444, 0x222222);
+        gridHelper.position.set(-GRID_SIZE/2, 0, -GRID_SIZE/2);
+        scene.add(gridHelper);
+
+        // Hand tracking vars
+        let handPos = new THREE.Vector3();
+        let isPinch = false;
+        let pinchTimer = 0;
+        const raycaster = new THREE.Raycaster();
+
+        // MediaPipe (mobile-first settings)
+        const videoElement = document.getElementById('video');
+        const canvasElement = document.getElementById('output_canvas');
+        canvasElement.width = isMobile ? 220 : 320;
+        canvasElement.height = isMobile ? 165 : 240;
+        const canvasCtx = canvasElement.getContext('2d');
+
+        async function initHands() {
+            const hands = new window.Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: isMobile ? 0 : 1, // Lite model on mobile
+                minDetectionConfidence: 0.75,
+                minTrackingConfidence: isMobile ? 0.6 : 0.7,
+                selfieMode: false
+            });
+
+            hands.onResults(onResults);
+
+            const cameraFeed = new window.Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: canvasElement.width,
+                height: canvasElement.height,
+                facingMode: isMobile ? 'user' : 'environment' // Selfie cam on mobile
+            });
+
+            try {
+                await cameraFeed.start();
+                updateStatus(isMobile ? 
+                    '✅ iQOO Z9x Ready! Show palm.' : 
+                    '✅ PC Ready! Show right hand.'
+                );
+            } catch(e) {
+                updateStatus('❌ Camera denied. Reload + Allow.');
+            }
+        }
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            if (videoElement.readyState === 4) {
+                canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            if (results.multiHandLandmarks?.[0]) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                window.drawConnectors(canvasCtx, landmarks, window.HAND_CONNECTIONS, {
+                    color: isMobile ? '#00ff88' : '#00FF00', 
+                    lineWidth: 2
+                });
+                window.drawLandmarks(canvasCtx, landmarks, {
+                    color: '#FF4444', radius: isMobile ? 2 : 3
+                });
+
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+
+                // Adaptive pinch threshold
+                const screenDist = Math.hypot(
+                    (indexTip.x - thumbTip.x) * canvasElement.width,
+                    (indexTip.y - thumbTip.y) * canvasElement.height
+                );
+                isPinch = screenDist < (isMobile ? 45 : 60);
+
+                // iQOO Z9x optimized projection
+                const depth = 4 + (indexTip.z * 3);
+                handPos.set(
+                    (indexTip.x - 0.5) * (isMobile ? 8 : 12),
+                    -(indexTip.y - 0.5) * (isMobile ? 8 : 12),
+                    depth
+                );
+
+                updateStatus(
+                    `✌️ ${isPinch ? 'ON' : 'OFF'} | ` +
+                    `📍 ${handPos.x.toFixed(1)},${handPos.y.toFixed(1)},${handPos.z.toFixed(1)}`
+                );
+            } else {
+                isPinch = false;
+                updateStatus(isMobile ? '👋 Show palm to camera' : '👋 Show right hand');
+            }
+            canvasCtx.restore();
+        }
+
+        // Voxel functions (perf optimized)
+        function createVoxel(x, y, z) {
+            const geometry = new THREE.BoxGeometry(voxelSize, voxelSize, voxelSize);
+            const material = new THREE.MeshLambertMaterial({ 
+                color: new THREE.Color().setHSL(Math.random()*0.1 + 0.5, 0.8, 0.6)
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+            if (!isMobile) {
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+            }
+            scene.add(mesh);
+            voxelMeshes.push(mesh);
+            return mesh;
+        }
+
+        function toggleVoxel(worldPos) {
+            const gridX = Math.floor(worldPos.x + GRID_SIZE/2);
+            const gridY = Math.floor(worldPos.y);
+            const gridZ = Math.floor(worldPos.z + GRID_SIZE/2);
+            const key = `${gridX}_${gridY}_${gridZ}`;
+            
+            if (voxelData.has(key)) {
+                const mesh = voxelMeshes.find(m => 
+                    Math.floor(m.position.x) === gridX &&
+                    Math.floor(m.position.y) === gridY &&
+                    Math.floor(m.position.z) === gridZ
+                );
+                if (mesh) {
+                    scene.remove(mesh);
+                    const idx = voxelMeshes.indexOf(mesh);
+                    voxelMeshes.splice(idx, 1);
+                    mesh.geometry.dispose();
+                    mesh.material.dispose();
+                }
+                voxelData.delete(key);
+            } else {
+                createVoxel(gridX - GRID_SIZE/2, gridY, gridZ - GRID_SIZE/2);
+                voxelData.set(key, true);
+            }
+            updateStats();
+        }
+
+        function handleHandInteraction() {
+            if (!isPinch || handPos.length() === 0) return;
+
+            const direction = handPos.clone().sub(camera.position).normalize();
+            raycaster.set(camera.position, direction);
+            const intersects = raycaster.intersectObjects(voxelMeshes);
+            const point = intersects.length ? intersects[0].point : 
+                         camera.position.clone().add(direction.multiplyScalar(5));
+
+            pinchTimer++;
+            if (pinchTimer > (isMobile ? 8 : 5)) {
+                toggleVoxel(point);
+                pinchTimer = 0;
+            }
+        }
+
+        // UI (same as before but adaptive)
+        function updateStatus(text) { document.getElementById('status').textContent = text; }
+        function updateStats() {
+            document.getElementById('stats').textContent = 
+                `Voxels: ${voxelData.size} | FPS: ${fps.toFixed(0)}`;
+        }
+
+        // Event listeners (mobile-ready)
+        document.getElementById('clearBtn').onclick = () => {
+            voxelMeshes.forEach(mesh => {
+                scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose();
+            });
+            voxelMeshes.length = 0; voxelData.clear(); updateStats();
+        };
+
+        document.getElementById('gridBtn').onclick = () => {
+            showGrid = !showGrid; gridHelper.visible = showGrid;
+        };
+
+        document.getElementById('sizeSlider').oninput = (e) => {
+            voxelSize = parseFloat(e.target.value);
+            voxelMeshes.forEach(mesh => mesh.scale.setScalar(voxelSize));
+        };
+
+        // Animate loop
+        function animate() {
+            requestAnimationFrame(animate);
+            frameCount++;
+            
+            handleHandInteraction();
+            controls.update();
+            
+            if (frameCount % 30 === 0) {
+                fps = 1000 / (performance.now() - lastTime);
+                lastTime = performance.now();
+                updateStats();
+            }
+            renderer.render(scene, camera);
+        }
+
+        // Responsive resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Auto-detect & start
+        initHands().then(() => animate());
+    </script>
+</body>
+</html>
